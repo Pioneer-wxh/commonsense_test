@@ -264,6 +264,7 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
         raise NotImplementedError
 
 
+
 class LoraLayer:
     def __init__(
         self,
@@ -286,78 +287,189 @@ class LoraLayer:
 
 
 class Linear(nn.Linear, LoraLayer):
-    # Lora implemented in a dense layer
+    """
+    Lora implementation in a dense layer.
+    This implementation is based on the LoRA approach but uses SVD decomposition
+    to initialize the adaptation parameters.
+    """
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        r: int = 0,
-        lora_alpha: int = 1,
-        lora_dropout: float = 0.0,
-        fan_in_fan_out: bool = False,  # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
-        merge_weights: bool = True,
-        **kwargs,
-    ):
-        nn.Linear.__init__(self, in_features, out_features, **kwargs)
-        LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+            self,
+            in_features: int,
+            out_features: int,
+            r: int = 0,
+            lora_alpha: int = 1,
+            lora_dropout: float = 0.0,
+            fan_in_fan_out: bool = False,  # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
+            merge_weights: bool = True,
+            **kwargs,
+        ):
+            nn.Linear.__init__(self, in_features, out_features, **kwargs)
+            LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
 
-        self.fan_in_fan_out = fan_in_fan_out
-        # Actual trainable parameters
-        if r > 0:
-            self.lora_A = nn.Linear(in_features, r, bias=False)
-            self.lora_B = nn.Linear(r, out_features, bias=False)
-            self.scaling = self.lora_alpha / self.r
-            # Freezing the pre-trained weight matrix
-            self.weight.requires_grad = False
-        self.reset_parameters()
-        if fan_in_fan_out:
-            self.weight.data = self.weight.data.T
+            self.fan_in_fan_out = fan_in_fan_out
+            # Actual trainable parameters
+            if r > 0:
+                self.lora_A = nn.Linear(in_features, r, bias=False)
+                # Using nn.Linear for S to allow setting train/eval mode
+                self.lora_S = nn.Linear(r, r, bias=False)
+                self.lora_B = nn.Linear(r, out_features, bias=False)
+                self.scaling = self.lora_alpha / self.r
+                # Freezing the pre-trained weight matrix
+                self.weight.requires_grad = False
+
+                # Register empty tensors (avoid None)
+                self.register_buffer("U", torch.empty(in_features, min(in_features, out_features)))
+                self.register_buffer("S", torch.empty(min(in_features, out_features)))
+                self.register_buffer("Vt", torch.empty((min(in_features, out_features), out_features)))
+                
+                self.index = 8
+                self.lora_index = nn.Linear(self.index, 1, bias=False)
+
+                self.lora_w_u = nn.Parameter(self.weight.new_zeros((in_features, self.index)))
+                self.lora_w_vt = nn.Parameter(self.weight.new_zeros((self.index, out_features)))
+                self.warmup = 100
+                self.FLAG = 0
+
+            self.reset_parameters()
+            if fan_in_fan_out:
+                self.weight.data = self.weight.data.T
 
     def reset_parameters(self):
+        """
+        Reset the parameters of the layer.
+        """
         nn.Linear.reset_parameters(self)
         if hasattr(self, "lora_A"):
-            # initialize A the same way as the default for nn.Linear and B to zero
-            nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+            # Initialize A and B with zeros
+            nn.init.zeros_(self.lora_A.weight)
             nn.init.zeros_(self.lora_B.weight)
+            # Initialize S with zeros
+            nn.init.zeros_(self.lora_S.weight)
+            nn.init.zeros_(self.lora_index.weight)
+            nn.init.zeros_(self.lora_w_u)
+            nn.init.zeros_(self.lora_w_vt)
+
+            weight_dtype = self.weight.dtype
+            adapter_dtype = weight_dtype
+
+            # SVD decomposition and ensure contiguous tensors
+            u, s, vt = torch.linalg.svd(self.weight.T.float(), full_matrices=False)
+            # Ensure buffers are on the same device as the model
+            self.U.data = u.detach().clone().contiguous().to(self.weight.device)
+            self.S.data = s.detach().clone().contiguous().to(self.weight.device)
+            self.Vt.data = vt.detach().clone().contiguous().to(self.weight.device)
+
+            # Always select the smallest r singular values (small mode)
+            u_sub = self.U[:, -self.r:].detach().clone().contiguous()
+            s_sub = self.S[-self.r:].detach().clone().contiguous()
+            vt_sub = self.Vt[-self.r:, :].detach().clone().contiguous()
+
+            # Initialize adapter parameters
+            self.lora_A.weight.data = u_sub.T.contiguous().to(adapter_dtype)
+            # Initialize S as a diagonal matrix using the singular values
+            s_diag = torch.diag(s_sub).to(adapter_dtype)
+            self.lora_S.weight.data = s_diag
+            self.lora_B.weight.data = vt_sub.T.contiguous().to(adapter_dtype)
+
+            # Merge adapter
+            merge = self.lora_B.weight @ self.lora_S.weight @ self.lora_A.weight
+            self.weight.data = (self.weight - merge * self.scaling).to(weight_dtype)
+
+    def calculate_change_rate(self, a, bb, r):
+        """
+        Calculate the change rate and return the indices of the top r values.
+        """
+        change_rate = abs(bb) / abs(a)
+        _, top_r_indices = torch.topk(change_rate, r)
+        return top_r_indices
 
     def train(self, mode: bool = True):
-        nn.Linear.train(self, mode)
+        """
+        Set the module in training mode.
+        """
         self.lora_A.train(mode)
         self.lora_B.train(mode)
-
+        self.lora_S.train(mode)
+        self.lora_index.train(mode)
+        
         if not mode and self.merge_weights and not self.merged:
             # Merge the weights and mark it
             if self.r > 0:
-                self.weight.data += (
-                    transpose(self.lora_B.weight @ self.lora_A.weight, self.fan_in_fan_out) * self.scaling
-                )
-            self.merged = True
-        elif self.merge_weights and self.merged:
-            # Make sure that the weights are not merged
+                # Correctly include S in the matrix multiplication
+                merge = self.lora_B.weight @ self.lora_S.weight @ self.lora_A.weight
+                self.weight.data += merge * self.scaling
+                merge_lora = (self.lora_w_u @ torch.diag(self.lora_index.weight.view(-1)) @ self.lora_w_vt).T
+                self.weight.data += merge_lora
+                
+                self.merged = True
+        elif mode and self.merge_weights and self.merged:
+            # Unmerge weights if going back to training mode
             if self.r > 0:
-                self.weight.data -= (
-                    transpose(self.lora_B.weight @ self.lora_A.weight, self.fan_in_fan_out) * self.scaling
-                )
-            self.merged = False
+                # Correctly include S in the matrix multiplication
+                merge = self.lora_B.weight @ self.lora_S.weight @ self.lora_A.weight
+                self.weight.data -= merge * self.scaling
+                merge_lora = (self.lora_w_u @ torch.diag(self.lora_index.weight.view(-1)) @ self.lora_w_vt).T
+                self.weight.data -= merge_lora
+                self.merged = False
 
     def eval(self):
+        """
+        Set the module in evaluation mode.
+        """
         nn.Linear.eval(self)
         self.lora_A.eval()
         self.lora_B.eval()
-
+        self.lora_S.eval()
+        self.lora_index.eval()
+        
     def forward(self, x: torch.Tensor):
         previous_dtype = self.weight.dtype
         if self.disable_adapters:
-            if self.r > 0 and self.merged:
-                matmul_output = self.lora_B.weight @ self.lora_A.weight
-                self.weight.data -= transpose(matmul_output.to(previous_dtype), self.fan_in_fan_out) * self.scaling
-                self.merged = False
-
-            result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+            raise NotImplementedError
         elif self.r > 0 and not self.merged:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
-            if self.r > 0:
-                result += ((self.lora_dropout(x.to(self.lora_A.weight.dtype)) @ self.lora_A.weight.T) @ self.lora_B.weight.T) * self.scaling
+            
+            # Include S in the forward pass
+            # First compute A(x)
+            lora_a_output = self.lora_dropout(x.to(self.lora_A.weight.dtype)) @ self.lora_A.weight.T
+            # Then apply S
+            lora_s_output = lora_a_output @ self.lora_S.weight.T
+            # Finally apply B
+            lora_output = lora_s_output @ self.lora_B.weight.T
+            
+            result += lora_output * self.scaling
+
+            if self.FLAG < self.warmup:
+                if self.FLAG == 0:
+                    self.lora_index.requires_grad = False
+                    self.lora_w_u.requires_grad = False
+                    self.lora_w_vt.requires_grad = False
+                self.FLAG += 1
+                return result
+
+            elif self.FLAG == self.warmup:
+                U = self.U
+                Vt = self.Vt
+                S = self.S
+                
+                # Correctly include S in the delta_W calculation
+                delta_W = self.lora_B.weight @ self.lora_S.weight @ self.lora_A.weight * self.scaling
+                delta_W = delta_W.to(dtype=torch.float32)
+
+                delta_weight_sigma = torch.diag(U.T @ delta_W.T @ Vt.T)
+                top_index = self.calculate_change_rate(S, delta_weight_sigma, self.index)
+
+                self.lora_w_u = nn.Parameter(U[:, top_index].to(self.lora_A.weight.dtype))
+                self.lora_w_vt = nn.Parameter(Vt[top_index, :].to(self.lora_A.weight.dtype))
+                self.lora_w_u.requires_grad = False
+                self.lora_w_vt.requires_grad = False
+
+                self.lora_index.requires_grad = True
+                self.FLAG += 1
+
+            if self.FLAG > self.warmup:
+                result += self.lora_dropout(x) @ (self.lora_w_u @ torch.diag(self.lora_index.weight.view(-1)) @ self.lora_w_vt)
+                return result
         else:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
 

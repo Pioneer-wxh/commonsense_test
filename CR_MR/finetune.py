@@ -34,6 +34,27 @@ from peft import (  # noqa: E402
 )
 from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel  # noqa: F402
 
+# #修改
+# from dotenv import load_dotenv
+# import os
+# from huggingface_hub import login
+
+# # 加载 .env 文件
+# load_dotenv()
+
+# # 获取 Hugging Face 令牌
+# hf_token = os.getenv("HF_TOKEN")
+
+# # 检查令牌是否成功加载
+# if hf_token is None:
+#     raise ValueError("HF_TOKEN 未在 .env 文件中找到，请确保 .env 文件正确配置")
+
+# # 使用令牌登录 Hugging Face
+# login(token=hf_token)
+
+# wandb_api_key = os.getenv("WANDB_API_KEY")
+# if wandb_api_key is None:
+#     raise ValueError("未在 .env 文件或环境变量中找到 WANDB_API_KEY")
 
 def train(
         # model/data params
@@ -165,6 +186,9 @@ def train(
             tokenizer = AutoTokenizer.from_pretrained(base_model)
         else:
             tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    elif model.config.model_type == "qwen" or model.config.model_type == "qwen2" or model.config.model_type == "qwen2.5":
+        print(f"load {model.config.model_type} tokenizer")
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
     else:
         tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
 
@@ -254,7 +278,10 @@ def train(
             num_virtual_tokens=num_virtual_tokens,
             task_type="CAUSAL_LM",
         )
+    print("Starting layer replacement")
     model = get_peft_model(model, config)
+    print("Layer replacement completed")
+    
     if adapter_name == "prefix-tuning":
         model.to('cuda')
 

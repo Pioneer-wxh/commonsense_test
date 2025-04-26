@@ -68,6 +68,9 @@ TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING = {
     "layoutlm": ["query", "value"],
     "llama": ["q_proj", "v_proj"],
     "chatglm": ["query_key_value"],
+    "qwen": ["q_proj", "v_proj"],
+    "qwen2": ["q_proj", "v_proj"],
+    "qwen2.5": ["q_proj", "v_proj"],
 }
 
 TRANSFORMERS_MODELS_TO_BOTTLENECK_TARGET_MODULES_MAPPING = {
@@ -77,6 +80,9 @@ TRANSFORMERS_MODELS_TO_BOTTLENECK_TARGET_MODULES_MAPPING = {
     "llama": ["gate_proj", "up_proj", "down_proj"],
     "opt": ["fc1", "fc2"],
     "chatglm": ["dense_h_to_4h", "dense_4h_to_h"],
+    "qwen": ["mlp.gate_proj", "mlp.down_proj", "mlp.up_proj"],
+    "qwen2": ["mlp.gate_proj", "mlp.down_proj", "mlp.up_proj"],
+    "qwen2.5": ["mlp.gate_proj", "mlp.down_proj", "mlp.up_proj"],
 }
 
 TRANSFORMERS_MODELS_TO_ADAPTERP_TARGET_MODULES_MAPPING = {
@@ -86,6 +92,9 @@ TRANSFORMERS_MODELS_TO_ADAPTERP_TARGET_MODULES_MAPPING = {
     "llama": ["down_proj"],
     "opt": ["fc2"],
     "chatglm": ["dense_4h_to_h"],
+    "qwen": ["mlp.down_proj"],
+    "qwen2": ["mlp.down_proj"],
+    "qwen2.5": ["mlp.down_proj"],
 }
 
 TRANSFORMERS_MODELS_TO_PARALLEL_TARGET_MODULES_MAPPING = {
@@ -95,6 +104,9 @@ TRANSFORMERS_MODELS_TO_PARALLEL_TARGET_MODULES_MAPPING = {
     "llama": ["q_proj", "v_proj", "k_proj"],
     "opt": ["q_proj", "v_proj", "k_proj"],
     "chatglm": ["query_key_value"],
+    "qwen": ["q_proj", "v_proj", "k_proj"],
+    "qwen2": ["q_proj", "v_proj", "k_proj"],
+    "qwen2.5": ["q_proj", "v_proj", "k_proj"],
 }
 
 
