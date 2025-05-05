@@ -16,6 +16,7 @@ conda activate Reasoning
 
 ```bash
 pip install -r requirements.txt
+pip install --upgrade transformers accelerate
 ```
 
 ## Code Structure
