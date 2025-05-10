@@ -351,7 +351,12 @@ def train(
             save_steps=save_step,
             output_dir=output_dir,
             save_total_limit=3,
+            #训练过程中定期保存模型检查点（checkpoint）
+            #每次保存时根据验证集上的性能判断是否是当前“最好”的模型
+            #如果是最好，则保存为 best_checkpoint
+            #训练结束后，如果设置了 load_best_model_at_end=True，则自动从磁盘加载这个最佳模型到内存中
             load_best_model_at_end=True if val_set_size > 0 else False,#当设置为 True 时，在训练结束后，会自动加载在验证集上表现最好的那个模型（即 checkpoint）作为最终模型
+
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=group_by_length,
             report_to="wandb" if use_wandb else None,
