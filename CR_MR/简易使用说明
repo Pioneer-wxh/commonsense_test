@@ -1,0 +1,26 @@
+# 配置环境
+按照readme.md文档进行配置环境
+
+# 修改peft文件夹
+## 修改算法
+1.确定要使用的微调算法，比如使用loradash，就将loradash.py文件复制，然后粘贴到lora.py文件中，这些文件的位置位于petf/src/tuners
+2.需要特别注意的是，如果使用sorsa算法，则需要先复制粘贴sorsa.py到lora.py，然后再确定一下peft仓库中两个__init__.py文件中是否正确引用了sorsa_trainer中的Trainer和Trainargument
+## 修改mapping
+当使用新的模型时，要修改此文件，具体如何修改，可以参考注释`#修改`，本仓库主要是修改添加了Qwen模型
+可以根据需要添加其他的模型，修改对应代码即可
+
+#修改finetune.py
+一般不需要更改，但是特殊情况需注意
+1.当使用sorsa算法的时候，要将finetune_sorsa.py中的内容复制粘贴到finetune.py文件中
+2.注意有些参数需要调整，比如load_best_model，根据需要进行调整，看要改为False还是True
+
+# 修改cmomonsense_eval.py
+这个的修改比较简单，就是要当我们使用新模型的时候，字典需要修改，同样可以参考注释`#修改`
+
+# 修改script
+目前主要是修改scripts_for_CR
+修改train.sh：可以调整epoch，学习率，注意力层，batch_size等
+修改eval.sh: 可以调整batch_size。目前因为commonsense_eval.py文件的bug，batch_size越大，最终的accuracy越小
+修改quick_start:可以调整传入脚本的参数，比如rank，alpha，以及输出的目录，几块GPU。
+如果GPU>0,则使用ddp
+如果填的 GPU = 0，也就是说只有一张卡，在本卡上进行单卡运行
