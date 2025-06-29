@@ -1,0 +1,3 @@
+bash /root/autodl-tmp/commonsense_test/CR_MR/scripts_for_MR/train.sh 32 48 ./finetune/lora_r=32/ 0
+
+bash /root/autodl-tmp/commonsense_test/CR_MR/scripts_for_MR/eval.sh ./finetune/lora_r=32/ 0
