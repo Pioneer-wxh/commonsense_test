@@ -6,13 +6,10 @@ import sys
 import argparse
 import fire
 import torch
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-os.environ['TRANSFORMERS_CACHE'] = './model'
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
 from peft import PeftModel
 from tqdm import tqdm
 from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer, AutoModelForCausalLM, AutoTokenizer
-from Direc_LoRA import *
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -236,11 +233,11 @@ def parse_args():
                         required=True,
                         help='Dataset to evaluate on')
     parser.add_argument('--model', 
-                        choices=['LLaMA-7B', 'BLOOM-7B', 'GPT-j-6B', 'Qwen2.5-7B', 'Qwen2.5-7B-Instruct'], 
+                        choices=['LLaMA-7B', 'BLOOM-7B', 'GPT-j-6B', 'Qwen2.5-7B', 'Qwen2.5-7B-Instruct'], #修改
                         required=True,
                         help='Base model to use')
     parser.add_argument('--adapter', 
-                        choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'Prefix', 'mylora'],
+                        choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'Prefix', 'Dislora'],#修改不是Dislora而是mylora
                         required=True,
                         help='Adapter type')
     parser.add_argument('--base_model', 
@@ -259,7 +256,7 @@ def parse_args():
                         help='Load model in 8bit mode')
     return parser.parse_args()
 
-def load_model(args) -> tuple:
+def load_model(args) -> tuple:#修改
     base_model = args.base_model
     if not base_model:
         raise ValueError(f'Cannot find base model name by the value: {args.model}')
@@ -283,108 +280,60 @@ def load_model(args) -> tuple:
     # 设置left padding
     tokenizer.padding_side = 'left'
     
-    # 针对 mylora 特殊处理
-    if args.adapter == "mylora":
-        if device == "cuda":
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model,
-                load_in_8bit=load_8bit,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                trust_remote_code=True,
-            )
-            config = Direc_config(
-                r=8,#评估的时候修改
-                target_modules=["q_proj", "v_proj", "o_proj", "k_proj"],  # Qwen2.5 的注意力模块
-                lora_alpha=12,#评估的时候修改
-                lora_dropout=0.05,
-                fan_in_fan_out=False,
-                bias="none",
-                task_type="CAUSAL_LM",
-                warmup_steps=10,
-                s_tsd=8,#评估的时候修改
-                ortho_lambda=1.0,
-                prefer_small_sigma=True
-            )
-            model = Direc_Model(model, config)
-            model.load_module(lora_weights)
-            print(model)
-        elif device == "mps":
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model, device_map={"": device}, low_cpu_mem_usage=True
-            )
-        # unwind broken decapoda-research config
-        model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-        model.config.bos_token_id = 1
-        model.config.eos_token_id = 2
-
+    # 加载模型
+    if device == "cuda":
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            load_in_8bit=load_8bit,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(
+            model,
+            lora_weights,
+            torch_dtype=torch.float16,
+            device_map={"": 0}
+        )
+    elif device == "mps":
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            device_map={"": device},
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(
+            model,
+            lora_weights,
+            device_map={"": device},
+            torch_dtype=torch.float16,
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model, 
+            device_map={"": device}, 
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(
+            model,
+            lora_weights,
+            device_map={"": device},
+        )
+    
+    # 设置token IDs
+    model.config.pad_token_id = tokenizer.pad_token_id# 设置模型的填充 token ID 为分词器的填充 token ID。
+    if hasattr(tokenizer, 'bos_token_id') and tokenizer.bos_token_id is not None:
+        model.config.bos_token_id = tokenizer.bos_token_id# 如果分词器有开始 token ID 且不为空，设置为模型的开始 token ID
+    if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
+        model.config.eos_token_id = tokenizer.eos_token_id# 如果分词器有结束 token ID 且不为空，设置为模型的结束 token ID。
+    
+    if device == "cpu":
         if not load_8bit:
-            model.half()  # seems to fix bugs for some users.
-
+            model.half()
         model.eval()
         if torch.__version__ >= "2" and sys.platform != "win32":
             model = torch.compile(model)
-    else:
-        # 加载模型
-        if device == "cuda":
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model,
-                load_in_8bit=load_8bit,
-                torch_dtype=torch.float16,
-                device_map="auto",
-                trust_remote_code=True,
-            )
-            model = PeftModel.from_pretrained(
-                model,
-                lora_weights,
-                torch_dtype=torch.float16,
-                device_map={"": 0}
-            )
-        elif device == "mps":
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-                trust_remote_code=True,
-            )
-            model = PeftModel.from_pretrained(
-                model,
-                lora_weights,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model, 
-                device_map={"": device}, 
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-            )
-            model = PeftModel.from_pretrained(
-                model,
-                lora_weights,
-                device_map={"": device},
-            )
-        
-        # 设置token IDs
-        model.config.pad_token_id = tokenizer.pad_token_id
-        if hasattr(tokenizer, 'bos_token_id') and tokenizer.bos_token_id is not None:
-            model.config.bos_token_id = tokenizer.bos_token_id
-        if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
-            model.config.eos_token_id = tokenizer.eos_token_id
-        
-        if device == "cpu":
-            if not load_8bit:
-                model.half()
-            model.eval()
-            if torch.__version__ >= "2" and sys.platform != "win32":
-                model = torch.compile(model)
     
     return tokenizer, model
 
