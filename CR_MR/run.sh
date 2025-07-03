@@ -2,12 +2,12 @@
 
 # 定义要尝试的学习率、lora_alpha 和 lora_r 值，可修改
 learning_rates=(3e-4)
-lora_alphas=(48)
-lora_ranks=(32)  # 添加不同的 LoRA rank 值
+lora_alphas=(12)
+lora_ranks=(8)  # 添加不同的 LoRA rank 值
 
 # 基础模型和数据路径等固定参数
 BASE_MODEL='Qwen/Qwen2.5-7B-Instruct'
-DATA_PATH='/root/autodl-tmp/commonsense_test/CR_MR/math_1k.json' #数据集的路径也要修改
+DATA_PATH='/root/autodl-tmp/commonsense_test/CR_MR/math_10k.json' #数据集的路径也要修改
 # 从 DATA_PATH 提取数据集名称
 DATASET_NAME=$(basename "${DATA_PATH}" .json)
 
@@ -17,12 +17,8 @@ NUM_EPOCHS=1 #修改
 CUTOFF_LEN=256
 VAL_SET_SIZE=120
 USE_GRADIENT_CHECKPOINTING=True
-ADAPTER_NAME=lora
+ADAPTER_NAME=mylora
 TARGET_MODULES='[q_proj,v_proj,k_proj,o_proj]'
-EVAL_STEP=1000
-SAVE_STEP=1000
-LORA_DROPOUT=0.05
-WEIGHT_DECAY=0.0
 WANDB_PROJECT=''
 WANDB_WATCH=''
 WANDB_LOG_MODEL=''
@@ -42,7 +38,7 @@ for lr in "${learning_rates[@]}"; do
       echo "Output directory: ${output_dir}"
       echo "Wandb run name: ${wandb_run_name}"
 
-      deepspeed --num_gpus=3 finetune.py \
+      deepspeed --num_gpus=4 finetune_MyLoRA.py \
         --base_model "${BASE_MODEL}" \
         --data_path "${DATA_PATH}" \
         --output_dir "${output_dir}" \
@@ -50,17 +46,13 @@ for lr in "${learning_rates[@]}"; do
         --micro_batch_size ${MICRO_BATCH_SIZE} \
         --num_epochs ${NUM_EPOCHS} \
         --learning_rate ${lr} \
-        --weight_decay ${WEIGHT_DECAY} \
         --cutoff_len ${CUTOFF_LEN} \
         --val_set_size ${VAL_SET_SIZE} \
         --use_gradient_checkpointing ${USE_GRADIENT_CHECKPOINTING} \
-        --eval_step ${EVAL_STEP} \
-        --save_step ${SAVE_STEP} \
         --adapter_name ${ADAPTER_NAME} \
         --lora_target_modules "${TARGET_MODULES}" \
         --lora_r ${rank} \
         --lora_alpha ${alpha} \
-        --lora_dropout ${LORA_DROPOUT} \
         --wandb_project "${WANDB_PROJECT}" \
         --wandb_run_name "${wandb_run_name}" \
         --wandb_watch "${WANDB_WATCH}" \
