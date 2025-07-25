@@ -1,0 +1,49 @@
+脚本math_evaluate.py中，生成函数（evaluate）参数为
+def evaluate(
+        instructions,#这是要输入evaluate函数的参数，没有输入的就采用默认值
+        input=None,#test测试集本身就没有input，可以理解为input放入到了instruction中
+        temperature=0.1,
+        top_p=0.75,
+        top_k=40,
+        num_beams=4,
+        max_new_tokens=512,
+        **kwargs,
+    ):
+
+
+脚本math_evaluate.py中，生成函数（evaluate）返回内容为
+return [output.lower().split("response:")[1].strip() for output in outputs]
+
+计算得分时，不使用math_evaluate.py脚本中的方案，使用以下脚本评估：
+# 此处读入的json文件为运行eval.sh后得到的json文件
+with open('./CR_MR/experiment/Qwen2.5-7B-Instruct-r16a24-new-mylora-gsm8k.json', 'r', encoding='utf-8') as f:
+    res = json.loads(f.read())
+truenum = 0
+allnum = 0
+for adata in res:
+    ff = 0
+    adata['output_pred'] = adata['output_pred'].lower()
+    if "response:" in adata['output_pred']:
+        adata['output_pred'] = adata['output_pred'].split("response:")[1].strip()
+    if 'answer' in adata['output_pred']:
+        ff = 1
+        adata['output_pred'] = adata['output_pred'].split('answer')[1]
+    if 'boxed' in adata['output_pred']:
+        ff = 1
+        adata['output_pred'] = adata['output_pred'].split('boxed')[1]
+    if ff:
+        sentence = adata['output_pred'].replace(',', '')
+        pred = [s for s in re.findall(r'-?\d+\.?\d*', sentence)]
+        pred_answer = float('inf')
+        if len(pred) > 0:
+            pred_answer = float(pred[0])
+    else:
+        sentence = adata['output_pred'].replace(',', '')
+        pred = [s for s in re.findall(r'-?\d+\.?\d*', sentence)]
+        pred_answer = float('inf')
+        if len(pred) > 0:
+            pred_answer = float(pred[-1])
+    if abs(pred_answer - float(adata['answer'])) < 1e-4:
+        truenum += 1
+    allnum += 1
+print(truenum,allnum,truenum/allnum)
