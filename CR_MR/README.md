@@ -8,7 +8,7 @@ This folder contains the implementations for commonsense reasoning and math reas
 ### Create and Activate the Conda Environment
 
 ```bash
-conda create -n Reasoning python=3.12
+conda create -n Reasoning python=3.11
 conda activate Reasoning
 ```
 
